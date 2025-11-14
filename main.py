@@ -1,47 +1,46 @@
 # ================================================================
 # IMPORTATIONS DE BIBLIOTHÈQUES
 # ------------------------------------------------
-# Tkinter et ttk : interface graphique native (widgets, styles, dialogues)
+# Tkinter et ttk : interface graphique (widgets, styles, boîtes de dialogue)
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-# sqlite3 : base de données embarquée
-# os/shutil/sys : gestion de fichiers, chemins et environnement
-# pyperclip : gestion du presse-papier (copie de texte)
+# sqlite3 : petite BD locale intégrée à Python
+# os/shutil/sys : fichiers, chemins, infos du système
+# pyperclip : copier du texte dans le presse-papier
 import sqlite3, os, shutil, pyperclip
 
-# PIL (Pillow) : chargement/redimensionnement d’images
+# PIL (Pillow) : ouvrir/redimensionner des images
 from PIL import Image, ImageTk
 
 # Matplotlib : graphiques intégrés dans Tkinter
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-# CSV : export des rapports
+# CSV : export de rapports
 import csv
 
-# sys : pour détecter l’exécutable packagé (PyInstaller, etc.)
+# sys : détecter si l’app roule en exécutable (PyInstaller, etc.)
 import sys
 
 # ───────────────────────── PATHS / DB ──────────────────────────
-# Petite astuce : si l’appli est « gelée » (exécutable), on récupère
-# le dossier de l’exe; sinon on prend le dossier du script courant.
+# Truc simple : si on est dans un .exe, on prend le dossier de l’exe,
+# sinon on prend le dossier du script. Pas plus compliqué que ça.
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Emplacements par défaut : fichier DB, dossier d’images, fichier
-# qui mémorise le dernier chemin DB ouvert par l’utilisateur.
+# Emplacements par défaut : fichier de BD, dossier d’images,
+# et petit fichier texte qui retient la dernière BD ouverte.
 DB_PATH = os.path.join(BASE_DIR, 'statteam.db')
 IMAGES_DIR = os.path.join(BASE_DIR, 'images')
 LAST_DB_FILE = os.path.join(BASE_DIR, 'last_db.txt')
 
 def get_last_db():
     """
-    Essaie de recharger le dernier fichier .db utilisé (qualité de vie 👌).
-    - Si LAST_DB_FILE existe et pointe vers un chemin valide : on l’utilise.
-    - Sinon on retombe sur la DB par défaut dans le dossier de l’app.
+    Recharge la dernière BD utilisée si on la retrouve (question de qualité de vie).
+    S’il n’y a rien, on retombe sur la BD par défaut à côté de l’app.
     """
     if os.path.exists(LAST_DB_FILE):
         with open(LAST_DB_FILE, 'r', encoding='utf-8') as f:
@@ -50,16 +49,16 @@ def get_last_db():
                 return path
     return DB_PATH
 
-# Chemin courant de la DB (peut changer si on en charge une autre)
+# Chemin courant vers la BD (peut changer si l’usager en ouvre une autre)
 CURRENT_DB_PATH = get_last_db()
 
-# On s’assure que le dossier des images existe — pas d’erreur plus tard.
+# S’assurer que le dossier d’images existe pour éviter des erreurs bêtes.
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
 # ────────────────────────── SCHEMA ─────────────────────────────
-# Schéma SQL complet. On crée au besoin (IF NOT EXISTS) toutes les tables
-# nécessaires : équipes, joueurs, cartes, matchs, stats des joueurs,
-# comptes de capitaines et relation « capitaine propriétaire » d’une équipe.
+# Schéma SQL complet. On crée « au besoin » (IF NOT EXISTS) tout ce qu’il faut :
+# équipes, joueurs, maps, matchs, stats de joueurs, comptes capitaines,
+# et le lien « capitaine propriétaire » d’une équipe.
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS Teams(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,39 +106,44 @@ CREATE TABLE IF NOT EXISTS TeamOwners(
     captain TEXT NOT NULL,
     FOREIGN KEY(team_id) REFERENCES Teams(id) ON DELETE CASCADE,
     FOREIGN KEY(captain) REFERENCES Captains(username) ON DELETE CASCADE);
+
+-- Règle d’affaires claire :
+-- - 1 capitaine max par équipe (déjà UNIQUE(team_id))
+-- - un capitaine ne peut pas gérer deux équipes.
+-- On met un UNIQUE sur la colonne captain et c’est réglé.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_teamowners_captain ON TeamOwners(captain);
+-- Fin des règles d’affaires
 '''
 
 def reconnect_db(path):
     """
-    (Ré)ouvre une base SQLite donnée par `path`, réapplique le schéma
-    et réinitialise le curseur. On mémorise aussi ce choix dans LAST_DB_FILE.
-    Finalement, on revient à l’écran de connexion (UX propre).
+    Ouvre/rouvre une BD SQLite, réapplique le schéma, met à jour le curseur
+    et mémorise le choix dans LAST_DB_FILE. Ensuite on retourne à l’écran de connexion.
     """
     global conn, cursor, CURRENT_DB_PATH
     try:
         conn.close()
     except:
-        # Si conn n’existait pas encore ou était déjà fermée, on ignore.
+        # Si ça existait pas ou c’était déjà fermé : pas grave.
         pass
     CURRENT_DB_PATH = path
-    # On sauvegarde le dernier chemin DB pour la prochaine exécution.
+    # Garder la trace du dernier fichier ouvert
     with open(LAST_DB_FILE, 'w', encoding='utf-8') as f:
         f.write(CURRENT_DB_PATH)
-    # Connexion + activation des clés étrangères (très important avec SQLite).
+    # Connexion + activer les clés étrangères (sinon SQLite laisse passer trop de trucs)
     conn = sqlite3.connect(CURRENT_DB_PATH)
     cursor = conn.cursor()
     cursor.execute('PRAGMA foreign_keys = ON')
-    # On s’assure que le schéma est en place (idempotent).
+    # On s’assure que tout le schéma est bien en place
     cursor.executescript(SCHEMA)
     conn.commit()
-    # On repart à l’accueil (utile si on change de DB en cours de route).
+    # Retour à l’accueil
     show_login()
 
 def load_db():
     """
-    Demande à l’utilisateur de choisir une base existante (.db) via un
-    dialogue. Si valide : on se reconnecte et on affiche un toast.
-    Petit overlay pour « geler » l’UI pendant l’action.
+    L’usager choisit une BD existante (.db). Si c’est bon, on bascule dessus et on affiche un petit message.
+    On met un overlay pour « figer » l’UI le temps de l’action.
     """
     ov = _overlay or show_overlay()
     try:
@@ -149,7 +153,7 @@ def load_db():
             filetypes=[('SQLite DB','*.db;*.sqlite'),('Tous Fichiers','*.*')]
         )
         if not file:
-            # L’utilisateur a annulé — on ferme l’overlay proprement.
+            # L’usager a annulé — on enlève l’overlay et on continue notre vie.
             ov.destroy()
             return
         reconnect_db(file)
@@ -159,7 +163,7 @@ def load_db():
         messagebox.showerror('Erreur', f'Échec chargement : {e}')
 
 # Connexion initiale
-# On ouvre la DB « courante », active les FK et applique le schéma.
+# On ouvre la BD courante, on active les FK et on applique le schéma.
 conn = sqlite3.connect(CURRENT_DB_PATH)
 cursor = conn.cursor()
 cursor.execute('PRAGMA foreign_keys = ON')
@@ -167,7 +171,6 @@ cursor.executescript(SCHEMA)
 conn.commit()
 
 # ───────────────────────── CONSTANTES UI ───────────────────────
-# Palette et styles de base de l’interface (fond sombre, accent vert).
 BG = '#0f1115'
 HEADER_BG = '#1a1d24'
 SUB_HDR = '#222733'
@@ -179,19 +182,19 @@ ACCENT_DARK = '#0b3d2c'
 # Fenêtre principale Tkinter
 root = tk.Tk()
 root.title('Statistic Team')
-root.geometry('1400x800')  # Largeur/hauteur par défaut (écran desktop)
+root.geometry('1400x800')
 root.configure(bg=BG)
 
-# États globaux (sélections ou écrans ouverts)
+# États globaux
 current_team = None
 current_player = None
-_overlay = None  # Frame plein-écran pour modales simples
+_overlay = None
 
 # Session / rôles
 current_role = None              # 'visitor' | 'captain' | 'admin'
 current_captain = None           # username si captain
 
-# Caches pour images (évite GC de Tkinter et rechargements)
+# Caches images
 team_images = {}
 player_images = {}
 map_images = {}
@@ -199,27 +202,23 @@ map_images = {}
 # ───────────────────────── UTILITAIRES STYLE ───────────────────
 def configure_styles():
     """
-    Configure les styles ttk utilisés partout (boutons neon, champs login,
-    onglets notebook, etc.). On tente le thème 'clam' qui va bien avec ttk.
+    Petits styles ttk utilisés partout (boutons neon, champs de login, onglets, etc.).
+    On tente le thème 'clam' parce qu’il joue bien avec ttk.
     """
     style = ttk.Style()
     try:
         style.theme_use('clam')
     except:
-        pass  # Si le thème n’est pas dispo, on garde celui par défaut.
+        pass
 
-    # Style par défaut : fond sombre, texte clair
     style.configure('.', background=BG, foreground=FG)
     style.configure('TLabel', background=BG, foreground=FG)
     style.configure('TFrame', background=BG)
 
-    # « Card » : panneaux légèrement distincts
     style.configure('Card.TFrame', background='#141823', relief='flat')
 
-    # Label « Muet » : texte en gris
     style.configure('Muted.TLabel', foreground=MUTED, background=BG)
 
-    # Bouton « néon » : look primaire vert punché
     style.configure('Neon.TButton',
                     background=ACCENT,
                     foreground='#04120d',
@@ -227,29 +226,20 @@ def configure_styles():
                     borderwidth=0)
     style.map('Neon.TButton', background=[('active', '#4dffb6')])
 
-    # Champs d’entrée pour les écrans de login/create
     style.configure('Login.TEntry',
                     fieldbackground='#0f141c',
                     foreground=FG)
-    style.map('Login.TEntry',
-              fieldbackground=[('focus', '#0d1720')])
+    style.map('Login.TEntry', fieldbackground=[('focus', '#0d1720')])
 
-    # Notebook (onglets) pour le dialogue Capitaine
     style.configure('Login.TNotebook', background=BG, borderwidth=0)
     style.configure('Login.TNotebook.Tab', background=SUB_HDR, foreground=FG, padding=(10, 6))
     style.map('Login.TNotebook.Tab', background=[('selected', '#2a3142')])
 
-# On applique nos styles une seule fois au démarrage.
 configure_styles()
 
 # ────────────────────────── HELPERS ────────────────────────────
 def load_img(path, size=(100, 100)):
-    """
-    Charge une image depuis `path`, la réduit proportionnellement à `size`
-    et la convertit en PhotoImage pour Tkinter.
-    - Retourne None si ça foire (fichier manquant/corrompu).
-    - Utilise LANCZOS (qualité supérieure) si dispo.
-    """
+    """Ouvre une image, la réduit et retourne PhotoImage; None si ça échoue. Simple de même."""
     try:
         img = Image.open(path)
         try:
@@ -263,11 +253,8 @@ def load_img(path, size=(100, 100)):
 
 def copy_to_images(src):
     """
-    Copie un fichier image arbitraire dans le dossier IMAGES_DIR et
-    retourne seulement le nom de fichier (à stocker en DB).
-    - Si `src` est vide (pas d’image choisie), retourne ''.
-    - En cas d’erreur de copie, on ignore (pas bloquant) et on retourne
-      quand même le nom final pour rester cohérent.
+    Copie un fichier image dans /images et retourne juste le nom du fichier.
+    Si rien passé : retourne '' (pas d’image).
     """
     if not src:
         return ''
@@ -280,9 +267,7 @@ def copy_to_images(src):
 
 def show_overlay():
     """
-    Crée un « overlay » plein écran (frame noire) qui désactive le fond,
-    parfait pour construire des mini-modales maison. Si un overlay existe
-    déjà, on le détruit pour éviter les doublons.
+    Petit voile plein écran pour bloquer l’arrière-plan pendant une action modale.
     """
     global _overlay
     if _overlay:
@@ -291,21 +276,14 @@ def show_overlay():
     _overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
     return _overlay
 
-def is_admin():
-    """Petit helper lisible : retourne True si la session est admin."""
-    return current_role == 'admin'
+def is_admin(): return current_role == 'admin'
 
 def is_captain():
-    """
-    True si la session est « capitaine » ET qu’on a un username chargé.
-    (Évite les états louches genre rôle défini sans identifiant.)
-    """
     return current_role == 'captain' and current_captain is not None
 
 def team_owned_by_current_captain(team_id: int) -> bool:
     """
-    Vérifie que l’équipe `team_id` appartient bien au capitaine connecté
-    (selon la table TeamOwners). Protège toutes les actions sensibles.
+    Vrai si l’équipe appartient au capitaine connecté (selon TeamOwners).
     """
     if not is_captain():
         return False
@@ -313,18 +291,10 @@ def team_owned_by_current_captain(team_id: int) -> bool:
     return cursor.fetchone() is not None
 
 def captain_has_team(username: str) -> bool:
-    """
-    True si ce capitaine possède déjà une équipe (limite : 1 équipe par
-    capitaine — logique d’affaires de l’app).
-    """
     cursor.execute('SELECT 1 FROM TeamOwners WHERE captain=?', (username,))
     return cursor.fetchone() is not None
 
 def get_captain_team_id(username: str):
-    """
-    Donne l’ID d’équipe associé au capitaine `username` si présent;
-    sinon retourne None. Pratique pour alimenter la section « My Team ».
-    """
     cursor.execute('SELECT team_id FROM TeamOwners WHERE captain=?', (username,))
     r = cursor.fetchone()
     return r[0] if r else None
@@ -332,12 +302,8 @@ def get_captain_team_id(username: str):
 # ───────────────────────── CONNEXION / INSCRIPTION ─────────────
 def show_login():
     """
-    Affiche l’écran de bienvenue / choix de rôle (visiteur, capitaine,
-    admin). On nettoie l’UI au complet pour repartir propre.
-    - Beau canvas en dégradé + carte centrée responsives.
-    - Deux tuiles : visiteur/capitaine, et un petit lien pour admin.
+    Écran d’accueil/choix de rôle.
     """
-    # reset UI
     global _overlay, current_role, current_captain
     if _overlay:
         _overlay.destroy()
@@ -347,16 +313,10 @@ def show_login():
     current_role = None
     current_captain = None
 
-    # background gradient canvas
     canvas = tk.Canvas(root, bd=0, highlightthickness=0, bg=BG)
     canvas.pack(fill='both', expand=True)
 
     def draw_gradient(event=None):
-        """
-        Dessine un dégradé vertical manuel (petites bandes colorées)
-        + un halo ovale pour donner un peu de profondeur. Appelé
-        lorsqu’on redimensionne la fenêtre pour garder un rendu propre.
-        """
         canvas.delete('grad')
         w = canvas.winfo_width()
         h = canvas.winfo_height()
@@ -370,12 +330,10 @@ def show_login():
             y0 = int(h * i / steps)
             y1 = int(h * (i+1) / steps)
             canvas.create_rectangle(0, y0, w, y1, outline='', fill=color, tags='grad')
-        # soft halo
         canvas.create_oval(-150, -150, 350, 350, fill=ACCENT_DARK, outline='', stipple='gray50', tags='grad')
 
     canvas.bind('<Configure>', draw_gradient)
 
-    # Carte centrée : un cadre « outer » (bord vert) + « card » (contenu).
     outer = tk.Frame(canvas, bg=ACCENT, bd=0)
     outer.place(relx=0.5, rely=0.5, anchor='center')
 
@@ -387,12 +345,10 @@ def show_login():
     canvas.tag_lower('grad')
     card.lift()
 
-    # Ombre portée toute simple pour le style.
     shadow = tk.Frame(canvas, bg='#000000', bd=0)
     shadow.place(in_=card, relx=0, rely=0, x=8, y=12, width=780, height=500)
     shadow.lower()
 
-    # Bandeau haut de la carte (logo + titre « Bienvenue »)
     header = tk.Frame(card, bg='#121726')
     header.place(relx=0, rely=0, relwidth=1, y=18, height=72)
 
@@ -413,13 +369,7 @@ def show_login():
     tiles_wrap = tk.Frame(card, bg='#121726')
     tiles_wrap.place(x=22, y=130, width=736, height=330)
 
-    # helper to create role tiles
     def tile(parent, title_text, desc_text, emoji, command):
-        """
-        Construit une « tuile » cliquable avec un emoji, un titre,
-        une description et un bouton « Continuer ». On ajoute un petit
-        hover (survol) pour un feedback visuel.
-        """
         holder = tk.Frame(parent, bg='#0f141f', bd=0, highlightthickness=1, highlightbackground='#1b2230')
         holder.pack(side='left', fill='both', expand=True, padx=8, pady=8)
 
@@ -438,7 +388,6 @@ def show_login():
         btn = ttk.Button(holder, text='Continuer', style='Neon.TButton', command=command)
         btn.pack(anchor='e', padx=16, pady=(0, 16))
 
-        # Petits effets de survol : bord + fond plus clair.
         def on_enter(_):
             holder.configure(highlightbackground=ACCENT, bg='#111a26')
         def on_leave(_):
@@ -448,23 +397,13 @@ def show_login():
             ch.bind('<Enter>', on_enter); ch.bind('<Leave>', on_leave)
         return holder
 
-    # actions
     def go_visitor():
-        """
-        Passe en mode « visiteur » (lecture seule), réinitialise le
-        capitaine courant et affiche la page d’accueil.
-        """
         global current_role, current_captain
         current_role = 'visitor'
         current_captain = None
         load_home()
 
     def admin_dialog():
-        """
-        Mini-dialogue modal pour connexion admin (admin/admin).
-        On n’encombre pas : juste deux champs + validation de base.
-        """
-        # simple modal for admin: admin/admin
         win = tk.Toplevel(root)
         win.title('Connexion administrateur')
         win.configure(bg=BG)
@@ -485,10 +424,6 @@ def show_login():
         frm.columnconfigure(1, weight=1)
 
         def submit(_evt=None):
-            """
-            Valide les identifiants en dur. Si OK, on passe en admin
-            et on charge l’accueil; sinon, on affiche une alerte.
-            """
             if u.get().strip().lower() == 'admin' and p.get() == 'admin':
                 global current_role, current_captain
                 current_role = 'admin'
@@ -502,17 +437,14 @@ def show_login():
         ttk.Button(btns, text='Annuler', command=win.destroy).pack(side='left')
         ttk.Button(btns, text='Se connecter', style='Neon.TButton', command=submit).pack(side='right')
 
-        # Enter submits
         euser.bind('<Return>', submit)
         epass.bind('<Return>', submit)
         win.bind('<Return>', submit)
 
     def captain_dialog():
         """
-        Dialogue modal pour Capitaine :
-        - Onglet « Se connecter »
-        - Onglet « Créer un compte »
-        Le tout avec validation simple et messages clairs.
+        Capitaine : login/création. À noter : la création de compte ne donne pas des pouvoirs de plus;
+        l’admin reste celui qui assigne la propriété d’une équipe.
         """
         win = tk.Toplevel(root)
         win.title('Capitaine — Connexion / Création')
@@ -542,10 +474,6 @@ def show_login():
         frmL.columnconfigure(1, weight=1)
 
         def do_login():
-            """
-            Vérifie les identifiants dans la table Captains.
-            Si succès : on retient le username et on bascule en rôle « captain ».
-            """
             user = u1.get().strip()
             pwd = p1.get()
             if not user or not pwd:
@@ -576,10 +504,6 @@ def show_login():
         frmC.columnconfigure(1, weight=1)
 
         def do_create():
-            """
-            Crée un compte capitaine simple (username unique, mdp basique).
-            On reste volontairement léger côté sécurité pour la démo.
-            """
             user = u2.get().strip()
             pwd = p2.get()
             pwd2 = p3.get()
@@ -600,28 +524,22 @@ def show_login():
         btnsC = ttk.Frame(f_create); btnsC.pack(fill='x', padx=14, pady=(4, 12))
         ttk.Button(btnsC, text='Créer le compte', style='Neon.TButton', command=do_create).pack(side='right')
 
-    # tiles
     def tile_row():
-        """
-        Construit la rangée de deux tuiles : Visiteur et Capitaine.
-        (On pourrait en ajouter d’autres ici au besoin.)
-        """
         tile(tiles_wrap,
              'Continuer en visiteur',
-             "Accès en lecture seule aux équipes de ligue et au leaderboard. Pas d’édition.",
+             "Lecture seule : équipes de la ligue et leaderboard. Pas d’édition.",
              '👀',
              go_visitor)
 
+        # Le texte reste vendeur, mais côté code, les droits sont contrôlés plus bas.
         tile(tiles_wrap,
              'Connexion capitaine',
-             "Gérez votre propre équipe (My Team) et ajoutez des matchs. Les autres équipes restent en lecture seule.",
+             "Gérez votre propre équipe (My Team) et ajoutez des matchs. Les autres équipes sont en lecture seule.",
              '🧭',
              captain_dialog)
 
     tile_row()
 
-    # --- Small admin link at the bottom-right of the card ---
-    # Petit lien discret pour ouvrir le dialogue admin.
     link = tk.Label(
         card,
         text='Connexion administrateur',
@@ -637,12 +555,6 @@ def show_login():
 
 # ─────────────────────── OVERLAYS : SUPPRIMER MAP ───────────────────────
 def delete_map_overlay():
-    """
-    Overlay pour supprimer une carte (map). Réservé à l’admin.
-    - Liste déroulante des maps existantes
-    - Confirmation avant suppression
-    - Refresh de l’accueil après coup
-    """
     if not is_admin():
         return
     ov = show_overlay()
@@ -654,17 +566,12 @@ def delete_map_overlay():
         return
     sel = tk.StringVar(value=maps[0][1])
     def confirm():
-        """
-        Récupère l’ID de la map choisie et la supprime après confirmation
-        (messagebox oui/non). Puis on recharge la page d’accueil.
-        """
         mid = next(m[0] for m in maps if m[1] == sel.get())
         if messagebox.askyesno('Confirmer', f'Supprimer la map « {sel.get()} » ?'):
             cursor.execute('DELETE FROM Maps WHERE id=?', (mid,))
             conn.commit()
             ov.destroy()
             load_home()
-    # Petite modale maison centrée
     frm = tk.Frame(ov, bg=SUB_HDR, bd=2, highlightbackground=ACCENT, highlightthickness=2)
     frm.place(relx=0.5, rely=0.5, anchor='center', width=520, height=320)
     tk.Label(frm, text='SUPPRIMER UNE MAP', fg=FG, bg=SUB_HDR,
@@ -681,20 +588,10 @@ def delete_map_overlay():
 
 # ─────────────────────── OVERLAY : BASE DE DONNÉES ───────────────────────
 def database_overlay():
-    """
-    Menu rapide de gestion de base de données (admin uniquement) :
-    - Créer une nouvelle DB (option de sauvegarder l’actuelle)
-    - Charger une DB existante
-    """
     if not is_admin():
         return
     ov = show_overlay()
     def create_new_db():
-        """
-        Demande un nom de fichier pour une nouvelle DB vide. Offre aussi
-        de faire une copie/sauvegarde de la base actuelle pour être safe.
-        Ensuite on reconnecte l’app sur la nouvelle DB.
-        """
         try:
             new_file = filedialog.asksaveasfilename(
                 title='Créer une nouvelle base vide',
@@ -705,8 +602,8 @@ def database_overlay():
                 return
             if messagebox.askyesno(
                 'Sauvegarde',
-                'Sauvegarder la base actuelle dans un deuxième fichier avec un nom différent ? '
-                'Dites non si vous êtes satisfait du nom de la base de données'
+                'Voulez-vous faire une copie de la base actuelle sous un autre nom ? '
+                'Si non, on passe tout de suite à la nouvelle BD.'
             ):
                 backup = filedialog.asksaveasfilename(
                     title='Sauvegarde base actuelle',
@@ -720,7 +617,6 @@ def database_overlay():
             ov.destroy()
         except Exception as e:
             messagebox.showerror('Erreur', f'Échec création : {e}')
-    # Cadre de l’overlay
     frm = tk.Frame(ov, bg=SUB_HDR, bd=2, highlightbackground=ACCENT, highlightthickness=2)
     frm.place(relx=0.5, rely=0.5, anchor='center', width=520, height=280)
     tk.Label(frm, text='NAVIGATION BASE DE DONNÉES', fg=FG, bg=SUB_HDR,
@@ -740,20 +636,19 @@ def database_overlay():
 # ======================================================================
 def add_team_overlay():
     """
-    Overlay d’ajout d’équipe.
-    - Admin : peut choisir le « side » (my/opp)
-    - Capitaine : side forcé à 'my' + une seule équipe permise
-    - Limites « freemium » : max 12 équipes si pas admin
+    Ajout d’équipe.
+    Décision de gestion : réservé à l’ADMIN (les capitaines ne créent pas d’équipes).
     """
-    if current_role not in ('admin', 'captain'):
+    # Vérification du rôle : admin seulement
+    if not is_admin():
         return
+
     ov = show_overlay()
     name_v, logo_v = tk.StringVar(), tk.StringVar()
     side_v = tk.StringVar(value='my')
     logo_path = ''
 
     def browse():
-        """Ouvre un sélecteur de fichier image pour le logo d’équipe."""
         nonlocal logo_path
         p = filedialog.askopenfilename()
         if p:
@@ -761,13 +656,6 @@ def add_team_overlay():
             logo_v.set(os.path.basename(p))
 
     def save():
-        """
-        Valide et enregistre l’équipe :
-        - Nom requis et <= 35 caractères
-        - Si capitaine a déjà une équipe : on bloque
-        - Copie du logo dans /images
-        - En tant que capitaine : on enregistre le propriétaire (TeamOwners)
-        """
         name = name_v.get().strip()
         if not name:
             messagebox.showerror('Erreur', 'Nom requis')
@@ -775,29 +663,19 @@ def add_team_overlay():
         if len(name) > 35:
             messagebox.showerror('Erreur', 'Le nom ne peut pas dépasser 35 caractères')
             return
-        if is_captain():
-            if captain_has_team(current_captain):
-                messagebox.showerror('Limite', "Vous avez déjà une équipe associée à votre compte.")
-                return
-            side = 'my'
-        else:
-            side = side_v.get()
-        cursor.execute('SELECT COUNT(*) FROM Teams')
-        if cursor.fetchone()[0] >= 12 and not is_admin():
-            messagebox.showerror('Limite atteinte', 'Version payante nécessaire pour plus de 12 équipes')
-            return
+
+        # Limite « freemium » 12 équipes pour non-admin — ici on est admin, donc on s’en fout.
         logo = copy_to_images(logo_path)
         cursor.execute('INSERT INTO Teams(name,logo,side) VALUES (?,?,?)',
-                       (name, logo, side))
+                       (name, logo, side_v.get()))
         new_team_id = cursor.lastrowid
-        if is_captain():
-            cursor.execute('INSERT INTO TeamOwners(team_id, captain) VALUES (?,?)',
-                           (new_team_id, current_captain))
+
+        # Pas d’auto-association de propriétaire ici : l’admin attribue ça ailleurs.
         conn.commit()
         ov.destroy()
         load_home()
 
-    # Modale centrée avec champs
+    # Modale centrée
     root.update_idletasks()
     max_h = root.winfo_height() - 60
     frm = tk.Frame(ov, bg=SUB_HDR, bd=2, highlightbackground=ACCENT, highlightthickness=2)
@@ -808,17 +686,14 @@ def add_team_overlay():
     fld.pack(fill='x', padx=20, pady=8)
     ttk.Label(fld, text='Nom :').pack(anchor='w', padx=6, pady=(6,0))
     ttk.Entry(fld, textvariable=name_v, style='Login.TEntry').pack(fill='x', padx=6, pady=4)
-    if is_admin():
-        sd = tk.Frame(frm, bg=BG, bd=2, highlightbackground=ACCENT, highlightthickness=2)
-        sd.pack(fill='x', padx=20, pady=8)
-        ttk.Label(sd, text='Side :').pack(anchor='w', padx=6, pady=(6,0))
-        ttk.Radiobutton(sd, text='My Team', variable=side_v, value='my').pack(anchor='w', padx=12, pady=2)
-        ttk.Radiobutton(sd, text='Opposition', variable=side_v, value='opp').pack(anchor='w', padx=12, pady=(0,6))
-    else:
-        # Rappel UX pour le rôle capitaine
-        info = tk.Label(frm, text="(En tant que capitaine, l’équipe sera votre « My Team »)",
-                        bg=SUB_HDR, fg=FG)
-        info.pack(pady=4)
+
+    # L’admin choisit le « side » au besoin
+    sd = tk.Frame(frm, bg=BG, bd=2, highlightbackground=ACCENT, highlightthickness=2)
+    sd.pack(fill='x', padx=20, pady=8)
+    ttk.Label(sd, text='Side :').pack(anchor='w', padx=6, pady=(6,0))
+    ttk.Radiobutton(sd, text='My Team', variable=side_v, value='my').pack(anchor='w', padx=12, pady=2)
+    ttk.Radiobutton(sd, text='Opposition', variable=side_v, value='opp').pack(anchor='w', padx=12, pady=(0,6))
+
     lg = tk.Frame(frm, bg=BG, bd=2, highlightbackground=ACCENT, highlightthickness=2)
     lg.pack(fill='x', padx=20, pady=8)
     ttk.Label(lg, text='Logo :').pack(anchor='w', padx=6, pady=(6,0))
@@ -830,11 +705,7 @@ def add_team_overlay():
     ttk.Button(bar, text='Enregistrer', style='Neon.TButton', command=save).pack(side='right', padx=45)
 
 def edit_team_overlay(tid):
-    """
-    Édition d’une équipe existante (admin ou capitaine propriétaire).
-    - On préremplit les champs avec les données actuelles.
-    - Admin peut changer le « side »; capitaine non (forcé à 'my').
-    """
+    """Modifier une équipe (admin ou capitaine propriétaire)."""
     if not (is_admin() or team_owned_by_current_captain(tid)):
         return
     cursor.execute('SELECT name,logo,side FROM Teams WHERE id=?', (tid,))
@@ -843,16 +714,12 @@ def edit_team_overlay(tid):
     name_v, logo_v, side_v = tk.StringVar(value=nm), tk.StringVar(value=lg or ''), tk.StringVar(value=sd)
     logo_path = os.path.join(IMAGES_DIR, lg) if lg else ''
     def browse():
-        """Choisit un nouveau logo si désiré."""
         nonlocal logo_path
         p = filedialog.askopenfilename()
         if p:
             logo_path = p
             logo_v.set(os.path.basename(p))
     def save():
-        """
-        Applique les changements (avec validations de base) et met à jour la DB.
-        """
         name = name_v.get().strip()
         if not name:
             messagebox.showerror('Erreur', 'Nom requis')
@@ -867,7 +734,6 @@ def edit_team_overlay(tid):
         conn.commit()
         ov.destroy()
         open_team(tid)
-    # Modale
     root.update_idletasks()
     max_h = root.winfo_height() - 60
     frm = tk.Frame(ov, bg=SUB_HDR, bd=2, highlightbackground=ACCENT, highlightthickness=2)
@@ -895,24 +761,18 @@ def edit_team_overlay(tid):
     ttk.Button(bar, text='Enregistrer', style='Neon.TButton', command=save).pack(side='right', padx=45)
 
 def add_map_overlay():
-    """
-    Ajout d’une map (admin seulement).
-    - Nom unique (contrainte SQL UNIQUE)
-    - Image optionnelle copiée dans /images
-    """
+    """Ajouter une map (admin seulement)."""
     if not is_admin(): return
     ov = show_overlay()
     name_v, img_v = tk.StringVar(), tk.StringVar()
     img_path = ''
     def browse():
-        """Choix de l’image de la map (facultatif)."""
         nonlocal img_path
         p = filedialog.askopenfilename()
         if p:
             img_path = p
             img_v.set(os.path.basename(p))
     def save():
-        """Valide le nom et pousse la map dans la DB, image comprise."""
         name = name_v.get().strip()
         if not name:
             messagebox.showerror('Erreur', 'Nom requis'); return
@@ -923,7 +783,6 @@ def add_map_overlay():
         cursor.execute('UPDATE Maps SET image=? WHERE name=?', (img, name))
         conn.commit()
         ov.destroy(); load_home()
-    # UI de la modale
     frm = tk.Frame(ov, bg=SUB_HDR, bd=2, highlightbackground=ACCENT, highlightthickness=2)
     frm.place(relx=0.5, rely=0.5, anchor='center', width=620, height=400)
     tk.Label(frm, text='AJOUTER UNE MAP', fg=FG, bg=SUB_HDR, font=('Arial', 18, 'bold')).pack(pady=(14, 10))
@@ -941,10 +800,7 @@ def add_map_overlay():
     ttk.Button(bar, text='Enregistrer', style='Neon.TButton', command=save).pack(side='right', padx=45)
 
 def edit_map_overlay(mid):
-    """
-    Modification d’une map (admin).
-    - Permet de renommer et de remplacer l’image.
-    """
+    """Modifier une map (admin)."""
     if not is_admin(): return
     cursor.execute('SELECT name,image FROM Maps WHERE id=?', (mid,))
     r = cursor.fetchone()
@@ -954,13 +810,11 @@ def edit_map_overlay(mid):
     name_v, img_v = tk.StringVar(value=nm), tk.StringVar(value=img or '')
     img_path = os.path.join(IMAGES_DIR, img) if img else ''
     def browse():
-        """Sélection d’une nouvelle image si dispo."""
         nonlocal img_path
         p = filedialog.askopenfilename()
         if p:
             img_path = p; img_v.set(os.path.basename(p))
     def save():
-        """Valide et met à jour le nom + l’image de la map."""
         name = name_v.get().strip()
         if not name:
             messagebox.showerror('Erreur', 'Nom requis'); return
@@ -969,7 +823,6 @@ def edit_map_overlay(mid):
         new_img = copy_to_images(img_path)
         cursor.execute('UPDATE Maps SET name=?,image=? WHERE id=?', (name, new_img, mid))
         conn.commit(); ov.destroy(); load_home()
-    # UI
     frm = tk.Frame(ov, bg=SUB_HDR, bd=2, highlightbackground=ACCENT, highlightthickness=2)
     frm.place(relx=0.5, rely=0.5, anchor='center', width=620, height=400)
     tk.Label(frm, text='MODIFIER MAP', fg=FG, bg=SUB_HDR, font=('Arial', 18, 'bold')).pack(pady=(14, 10))
@@ -988,8 +841,7 @@ def edit_map_overlay(mid):
 
 def add_player_overlay(team_id):
     """
-    Ajout d’un joueur dans une équipe donnée (admin ou capitaine propriétaire).
-    - Limite « freemium » : 40 joueurs max si pas admin.
+    Ajouter un joueur (admin ou capitaine propriétaire).
     """
     if not (is_admin() or team_owned_by_current_captain(team_id)):
         return
@@ -997,13 +849,11 @@ def add_player_overlay(team_id):
     name_v, logo_v = tk.StringVar(), tk.StringVar()
     logo_path = ''
     def browse():
-        """Choisit un portrait/logo pour le joueur (facultatif)."""
         nonlocal logo_path
         p = filedialog.askopenfilename()
         if p:
             logo_path = p; logo_v.set(os.path.basename(p))
     def save():
-        """Valide nom (<=35) et insère le joueur; copie l’image s’il y en a une."""
         name = name_v.get().strip()
         if not name:
             messagebox.showerror('Erreur', 'Nom requis'); return
@@ -1015,7 +865,6 @@ def add_player_overlay(team_id):
         logo = copy_to_images(logo_path)
         cursor.execute('INSERT INTO Players(team_id,name,logo) VALUES (?,?,?)', (team_id, name, logo))
         conn.commit(); ov.destroy(); open_team(team_id)
-    # UI
     frm = tk.Frame(ov, bg=SUB_HDR, bd=2, highlightbackground=ACCENT, highlightthickness=2)
     frm.place(relx=0.5, rely=0.5, anchor='center', width=620, height=400)
     tk.Label(frm, text='AJOUTER UN JOUEUR', fg=FG, bg=SUB_HDR, font=('Arial', 18, 'bold')).pack(pady=(14, 10))
@@ -1033,10 +882,7 @@ def add_player_overlay(team_id):
     ttk.Button(bar, text='Enregistrer', style='Neon.TButton', command=save).pack(side='right', padx=45)
 
 def edit_player_overlay(pid):
-    """
-    Modification d’un joueur existant (admin ou capitaine propriétaire).
-    - On recharge l’équipe parente pour vérifier les permissions.
-    """
+    """Modifier un joueur (admin ou capitaine proprio)."""
     cursor.execute('SELECT team_id,name,logo FROM Players WHERE id=?', (pid,))
     r = cursor.fetchone()
     if not r: return
@@ -1046,13 +892,11 @@ def edit_player_overlay(pid):
     name_v, logo_v = tk.StringVar(value=nm), tk.StringVar(value=lg or '')
     logo_path = os.path.join(IMAGES_DIR, lg) if lg else ''
     def browse():
-        """Remplacer l’image du joueur (optionnel)."""
         nonlocal logo_path
         p = filedialog.askopenfilename()
         if p:
             logo_path = p; logo_v.set(os.path.basename(p))
     def save():
-        """Met à jour nom + logo selon validation basique."""
         name = name_v.get().strip()
         if not name:
             messagebox.showerror('Erreur', 'Nom requis'); return
@@ -1061,7 +905,6 @@ def edit_player_overlay(pid):
         logo = copy_to_images(logo_path)
         cursor.execute('UPDATE Players SET name=?,logo=? WHERE id=?', (name, logo, pid))
         conn.commit(); ov.destroy(); open_team(team_id)
-    # UI
     frm = tk.Frame(ov, bg=SUB_HDR, bd=2, highlightbackground=ACCENT, highlightthickness=2)
     frm.place(relx=0.5, rely=0.5, anchor='center', width=620, height=400)
     tk.Label(frm, text='MODIFIER JOUEUR', fg=FG, bg=SUB_HDR, font=('Arial', 18, 'bold')).pack(pady=(14, 10))
@@ -1079,20 +922,14 @@ def edit_player_overlay(pid):
     ttk.Button(bar, text='Enregistrer', style='Neon.TButton', command=save).pack(side='right', padx=45)
 
 def delete_team(tid):
-    """
-    Supprime une équipe (admin ou capitaine propriétaire) après
-    confirmation. Les FK (ON DELETE CASCADE) nettoient le reste.
-    """
+    """Supprime une équipe (admin ou capitaine propriétaire)."""
     if not (is_admin() or team_owned_by_current_captain(tid)): return
     if messagebox.askyesno('Confirmer', 'Supprimer cette équipe ?'):
         cursor.execute('DELETE FROM Teams WHERE id=?', (tid,))
         conn.commit(); load_home()
 
 def delete_player(pid):
-    """
-    Supprime un joueur (admin/capitaine propriétaire). On récupère
-    d’abord l’équipe pour recharger la vue au bon endroit après.
-    """
+    """Supprime un joueur (admin/capitaine proprio)."""
     cursor.execute('SELECT team_id FROM Players WHERE id=?', (pid,))
     r = cursor.fetchone()
     if not r: return
@@ -1106,11 +943,6 @@ def delete_player(pid):
 # Exports CSV
 # ======================================================================
 def export_best_players():
-    """
-    Exporte en CSV le classement des joueurs par ratio K/D global.
-    - Agrège kills/deaths par joueur (toutes maps/parties confondues).
-    - Colonne KD formatée à 2 décimales.
-    """
     path = filedialog.asksaveasfilename(
         title='Enregistrer rapport Meilleurs Joueurs',
         defaultextension='.csv',
@@ -1134,11 +966,6 @@ def export_best_players():
     messagebox.showinfo('Succès', 'Rapport Meilleurs Joueurs enregistré.')
 
 def export_best_teams():
-    """
-    Exporte en CSV le classement des équipes par « WinRate » (en %).
-    - WinRate = victoires / (victoires + défaites) * 100
-    - Classement décroissant
-    """
     path = filedialog.asksaveasfilename(
         title='Enregistrer rapport Meilleures Équipes',
         defaultextension='.csv',
@@ -1162,10 +989,6 @@ def export_best_teams():
     messagebox.showinfo('Succès', 'Rapport Meilleures Équipes enregistré.')
 
 def export_most_played_maps():
-    """
-    Exporte en CSV les maps « les plus jouées » selon le nombre total
-    de rounds (won+lost) accumulés sur chaque map.
-    """
     path = filedialog.asksaveasfilename(
         title='Enregistrer rapport Maps les plus jouées',
         defaultextension='.csv',
@@ -1189,10 +1012,6 @@ def export_most_played_maps():
     messagebox.showinfo('Succès', 'Rapport Maps les plus jouées enregistré.')
 
 def export_overlay():
-    """
-    Petit menu d’export (overlay) pour choisir quel rapport produire.
-    On délègue ensuite aux fonctions ci-dessus.
-    """
     ov = show_overlay()
     frm = tk.Frame(ov, bg=SUB_HDR, bd=2, highlightbackground=ACCENT, highlightthickness=2)
     frm.place(relx=0.5, rely=0.5, anchor='center', width=400, height=280)
@@ -1211,11 +1030,6 @@ def export_overlay():
 # Analyses / Vues
 # ======================================================================
 def build_team_winrate_data(tid: int):
-    """
-    Prépare les données de winrate par map pour une équipe `tid`.
-    - Retourne deux listes : labels (noms de maps) et values (winrate %).
-    - Calcul : rounds_won / (won+lost) * 100, 0 si aucune partie.
-    """
     cursor.execute('''
         SELECT m.name, COALESCE(SUM(mat.rounds_won),0), COALESCE(SUM(mat.rounds_lost),0)
         FROM Maps m
@@ -1231,11 +1045,6 @@ def build_team_winrate_data(tid: int):
     return labels, values
 
 def build_players_kd_data(tid: int):
-    """
-    Prépare les données K/D par joueur pour l’équipe `tid`.
-    - Si deaths == 0 : on prend kills (ou 0) pour éviter la division par 0.
-    - Retour : (labels des joueurs, valeurs K/D)
-    """
     cursor.execute('''
         SELECT p.name, COALESCE(SUM(ps.kills),0), COALESCE(SUM(ps.deaths),0)
         FROM Players p
@@ -1252,13 +1061,6 @@ def build_players_kd_data(tid: int):
     return labels, values
 
 def analyse_team_interface(tid: int):
-    """
-    Vue « Analyse » d’une équipe :
-    - Graphique barres winrate par map
-    - Graphique barres K/D par joueur
-    - En-tête avec logo et nom de l’équipe
-    """
-    # On nettoie l’UI sauf l’overlay (s’il existe).
     for w in root.winfo_children():
         if w is not _overlay:
             w.destroy()
@@ -1268,7 +1070,6 @@ def analyse_team_interface(tid: int):
         load_home(); return
     team_name, team_logo = r
 
-    # Barre de retour (flèche) pour revenir à la fiche d’équipe
     topbar = tk.Frame(root, bg=BG); topbar.pack(fill='x', pady=4, padx=4)
     back_ic = load_img(os.path.join(IMAGES_DIR, 'back.png'), (40, 40))
     btn = tk.Button(topbar, image=back_ic if back_ic else None, text='← Retour' if not back_ic else '',
@@ -1277,7 +1078,6 @@ def analyse_team_interface(tid: int):
     btn.pack(side='left')
     if back_ic: btn.image = back_ic
 
-    # En-tête (logo + nom)
     header = tk.Frame(root, bg=BG); header.pack(fill='x', pady=8, padx=10)
     logo_box = tk.Frame(header, bg=BG, bd=2, highlightbackground=ACCENT, highlightthickness=2,
                         width=200, height=200)
@@ -1290,15 +1090,12 @@ def analyse_team_interface(tid: int):
         team_images[tid] = big_logo
     tk.Label(header, text=team_name, fg=FG, bg=BG, font=('Arial', 26, 'bold')).pack(side='left', padx=20)
 
-    # Corps avec deux panneaux côte à côte : winrate + KD
     body = tk.Frame(root, bg=BG); body.pack(fill='both', expand=True, padx=20, pady=10)
     bg_color = '#0f1115'; text_color = 'lightgrey'
-    # Palette vive pour les barres (on recycle les couleurs)
     vibrant_colors = ['#e6194B','#3cb44b','#ffe119','#4363d8','#f58231','#911eb4','#46f0f0','#f032e6',
                       '#bcf60c','#fabebe','#008080','#e6beff','#9A6324','#fffac8','#800000','#aaffc3',
                       '#808000','#ffd8b1','#000075','#808080']
 
-    # Graphique Win-rate par map
     left = tk.Frame(body, bg=BG); left.pack(side='left', fill='both', expand=True, padx=10)
     tk.Label(left, text='Win-rate de l’équipe par map', fg=text_color, bg=BG,
              font=('Consolas', 14, 'bold')).pack(pady=6)
@@ -1315,7 +1112,6 @@ def analyse_team_interface(tid: int):
     canvas1 = FigureCanvasTkAgg(fig1, master=left); canvas1.draw()
     canvas1.get_tk_widget().pack(fill='both', expand=True)
 
-    # Graphique K/D par joueur
     right = tk.Frame(body, bg=BG); right.pack(side='left', fill='both', expand=True, padx=10)
     tk.Label(right, text='Ratios K/D des joueurs', fg=text_color, bg=BG,
              font=('Consolas', 14, 'bold')).pack(pady=6)
@@ -1334,11 +1130,6 @@ def analyse_team_interface(tid: int):
     canvas2.get_tk_widget().pack(fill='both', expand=True)
 
 def copy_player_stats(pid, pname):
-    """
-    Construit un résumé texte des stats du joueur `pid` par map et
-    le met dans le presse-papier (nom en première ligne, puis détails).
-    - Pour chaque map : nb de games, KD, Win-rate, Bombs.
-    """
     stats_lines = []
     cursor.execute('SELECT id, name FROM Maps')
     for mid, mname in cursor.fetchall():
@@ -1364,11 +1155,6 @@ def copy_player_stats(pid, pname):
     messagebox.showinfo('Copié', 'Nom et stats du joueur copiés !')
 
 def open_player(pid: int):
-    """
-    Affiche la fiche détaillée d’un joueur (portrait, KD global, stats par map).
-    - Bouton « Copier » pour mettre le résumé dans le presse-papier.
-    - Retour à l’équipe parent via la flèche.
-    """
     global current_player
     current_player = pid
     for w in root.winfo_children():
@@ -1383,7 +1169,6 @@ def open_player(pid: int):
     k_tot, d_tot = cursor.fetchone()
     overall_kd = (k_tot / d_tot) if d_tot else (k_tot if k_tot else 0)
 
-    # Barre de retour
     tb = tk.Frame(root, bg=BG); tb.pack(fill='x', pady=4, padx=4)
     back_ic = load_img(os.path.join(IMAGES_DIR, 'back.png'), (40, 40))
     btn = tk.Button(tb, image=back_ic if back_ic else None, text='← Retour' if not back_ic else '',
@@ -1392,7 +1177,6 @@ def open_player(pid: int):
     btn.pack(side='left')
     if back_ic: btn.image = back_ic
 
-    # En-tête du joueur (image + nom + bouton copier + KD global)
     header = tk.Frame(root, bg=BG); header.pack(fill='x', pady=10, padx=20)
     p_path = (os.path.join(IMAGES_DIR, plogo) if plogo else os.path.join(IMAGES_DIR, 'anonymous.png'))
     p_img = load_img(p_path, (220, 220))
@@ -1411,7 +1195,6 @@ def open_player(pid: int):
     tk.Label(kd_box, text=f"KD global : {overall_kd:.2f}", fg=FG, bg=SUB_HDR,
              font=('Consolas', 16, 'bold')).pack(padx=10, pady=12)
 
-    # Liste déroulante des stats par map (scroll)
     body = tk.Frame(root, bg=BG); body.pack(fill='both', expand=True, padx=20, pady=10)
     canvas = tk.Canvas(body, bg=BG, highlightthickness=0)
     yscr = tk.Scrollbar(body, orient='vertical', command=canvas.yview)
@@ -1419,11 +1202,8 @@ def open_player(pid: int):
     yscr.pack(side='right', fill='y'); canvas.pack(side='left', fill='both', expand=True)
     inner = tk.Frame(canvas, bg=BG); wid = canvas.create_window((0, 0), window=inner, anchor='nw')
     canvas.bind('<Configure>', lambda e: canvas.itemconfig(wid, width=canvas.winfo_width()))
-    inner.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all'))
+    inner.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
 
-    )
-
-    # Pour chaque map, on calcule les stats agrégées du joueur et on affiche une carte.
     cursor.execute('SELECT id, name, image FROM Maps')
     for mid, mname, mimg in cursor.fetchall():
         cursor.execute('''SELECT COUNT(DISTINCT m.id),
@@ -1451,13 +1231,95 @@ def open_player(pid: int):
         tk.Label(big, text=f"Win-rate : {wr:.1f} %", fg=FG, bg=BG).pack(anchor='w', padx=8)
         tk.Label(big, text=f"Games joués : {games} | Bombs : {b}", fg=FG, bg=BG).pack(anchor='w', padx=8, pady=(0, 6))
 
+# ─────────────────────────────────────────────────────────────────────────
+# Assignation de capitaine (ADMIN, par équipe)
+# ─────────────────────────────────────────────────────────────────────────
+def assign_captain_overlay(team_id: int):
+    """
+    Petite fenêtre pour permettre à l’ADMIN d’assigner un compte capitaine à l’équipe.
+    Rappel des règles :
+      - Une équipe = un seul capitaine.
+      - Un capitaine = une seule équipe.
+      - On liste seulement les capitaines « libres » + celui déjà en place au besoin.
+    """
+    if not is_admin():
+        return
+
+    # Capitaine actuel (s’il y en a un)
+    cursor.execute('SELECT captain FROM TeamOwners WHERE team_id=?', (team_id,))
+    r = cursor.fetchone()
+    current_cap = r[0] if r else None
+
+    # Tous les comptes capitaine existants
+    cursor.execute('SELECT username FROM Captains ORDER BY username COLLATE NOCASE')
+    all_caps = [row[0] for row in cursor.fetchall()]
+
+    # Capitaines déjà pris ailleurs
+    cursor.execute('SELECT captain FROM TeamOwners')
+    taken = {row[0] for row in cursor.fetchall()}
+
+    # Éligibles : non pris OU déjà celui de l’équipe
+    eligible = [u for u in all_caps if (u == current_cap) or (u not in taken)]
+
+    if not eligible:
+        messagebox.showinfo('Info', "Aucun capitaine dispo à assigner pour l’instant.")
+        return
+
+    ov = show_overlay()
+    frm = tk.Frame(ov, bg=SUB_HDR, bd=2, highlightbackground=ACCENT, highlightthickness=2)
+    frm.place(relx=0.5, rely=0.5, anchor='center', width=560, height=300)
+
+    tk.Label(frm, text='ASSIGNER UN CAPITAINE', fg=FG, bg=SUB_HDR,
+             font=('Arial', 18, 'bold')).pack(pady=(14, 6))
+
+    info = tk.Frame(frm, bg=BG, bd=2, highlightbackground=ACCENT, highlightthickness=2)
+    info.pack(fill='x', padx=20, pady=8)
+
+    # Afficher le capitaine en place si présent (toujours bon à voir)
+    if current_cap:
+        txt = f"Capitaine actuel : {current_cap}"
+    else:
+        txt = "Capitaine actuel : (aucun)"
+    ttk.Label(info, text=txt).pack(anchor='w', padx=8, pady=8)
+
+    # Sélecteur de capitaine
+    sel_box = tk.Frame(frm, bg=BG, bd=2, highlightbackground=ACCENT, highlightthickness=2)
+    sel_box.pack(fill='x', padx=20, pady=8)
+    ttk.Label(sel_box, text="Choisir le compte capitaine à assigner :").pack(anchor='w', padx=8, pady=(8, 2))
+    cap_v = tk.StringVar(value=(current_cap if current_cap in eligible else eligible[0]))
+    ttk.OptionMenu(sel_box, cap_v, cap_v.get(), *eligible).pack(fill='x', padx=8, pady=(0, 10))
+
+    def save_assignment():
+        chosen = cap_v.get().strip()
+        if not chosen:
+            messagebox.showerror('Erreur', 'Veuillez choisir un capitaine.')
+            return
+
+        # Validation : ce capitaine n’est pas déjà pris ailleurs
+        cursor.execute('SELECT team_id FROM TeamOwners WHERE captain=?', (chosen,))
+        row = cursor.fetchone()
+        if row and row[0] != team_id:
+            messagebox.showerror('Erreur', "Ce capitaine est déjà assigné à une autre équipe.")
+            return
+
+        # Mise à jour ou insertion selon la situation
+        if current_cap:
+            cursor.execute('UPDATE TeamOwners SET captain=? WHERE team_id=?', (chosen, team_id))
+        else:
+            cursor.execute('INSERT OR REPLACE INTO TeamOwners(team_id, captain) VALUES (?,?)', (team_id, chosen))
+        conn.commit()
+        messagebox.showinfo('Succès', "Capitaine assigné à l’équipe.")
+        ov.destroy()
+        open_team(team_id)
+
+    bar = tk.Frame(frm, bg=SUB_HDR); bar.pack(side='bottom', fill='x', pady=12)
+    ttk.Button(bar, text='Annuler', command=ov.destroy).pack(side='left', padx=45)
+    ttk.Button(bar, text='Assigner', style='Neon.TButton', command=save_assignment).pack(side='right', padx=45)
+
 def open_team(tid: int):
     """
-    Fiche d’une équipe :
-    - En-tête (logo, nom, winrate global)
-    - Liste des joueurs (KD + winrate joueur) avec actions selon permissions
-    - Liste des maps jouées par l’équipe (avec stats de rounds)
-    - Boutons « Analyse » et « Exporter »
+    Fiche d’équipe.
+    Note : en mode ADMIN, on affiche aussi le bouton « Assigner capitaine ».
     """
     global current_team
     current_team = tid
@@ -1474,7 +1336,6 @@ def open_team(tid: int):
     tw, tl = cursor.fetchone()
     overall_wr = tw / (tw + tl) * 100 if tw + tl else 0
 
-    # Barre du haut : bouton retour + actions contextuelles (edit/suppr si permis)
     tb = tk.Frame(root, bg=BG); tb.pack(fill='x', pady=4, padx=4)
     back_ic = load_img(os.path.join(IMAGES_DIR, 'back.png'), (40, 40))
     tk.Button(tb, image=back_ic if back_ic else None, text='← Retour' if not back_ic else '', compound='left',
@@ -1489,7 +1350,11 @@ def open_team(tid: int):
         ttk.Button(tb, text='Supprimer équipe', style='Neon.TButton',
                    command=lambda: delete_team(tid)).pack(side='right', padx=3)
 
-    # En-tête avec logo + nom + winrate global
+    # Bouton pour attribuer un capitaine (admin)
+    if is_admin():
+        ttk.Button(tb, text='Assigner capitaine', style='Neon.TButton',
+                   command=lambda: assign_captain_overlay(tid)).pack(side='right', padx=3)
+
     header = tk.Frame(root, bg=BG); header.pack(fill='x', pady=8, padx=10)
     logo_box = tk.Frame(header, bg=BG, bd=2, highlightbackground=ACCENT, highlightthickness=2,
                         width=250, height=250)
@@ -1509,24 +1374,19 @@ def open_team(tid: int):
     tk.Label(wr_box, text=f'Win-rate (toutes maps) : {overall_wr:.1f} %',
              fg=FG, bg=SUB_HDR, font=('Consolas', 14, 'bold')).pack(pady=10)
 
-    # Bouton vers la vue « Analyse » (graphiques)
     tk.Button(root, text='Analyse', bg=ACCENT, fg='#04120d', bd=0, font=('Arial', 12, 'bold'),
               command=lambda i=tid: analyse_team_interface(i)).pack(pady=5)
 
-    # Corps de page : deux colonnes (joueurs à gauche, maps à droite)
     body = tk.Frame(root, bg=BG); body.pack(fill='both', expand=True, padx=10, pady=10)
 
-    # Colonne gauche : joueurs
     left_outer = tk.Frame(body, bg=ACCENT, bd=1)
     left_outer.pack(side='left', fill='both', expand=True, padx=10)
     left_inner = tk.Frame(left_outer, bg=BG); left_inner.pack(fill='both', expand=True, padx=4, pady=4)
 
-    # Action « Ajouter joueur » si on a les permissions
     if is_admin() or is_owner:
         tk.Button(left_inner, text='Ajouter joueur', bg=ACCENT, fg='#04120d', bd=0,
                   command=lambda: add_player_overlay(tid)).pack(pady=6)
 
-    # Liste scrollable des joueurs
     pl_canvas = tk.Canvas(left_inner, bg=BG, highlightthickness=0)
     pl_scroll = tk.Scrollbar(left_inner, orient='vertical', command=pl_canvas.yview)
     pl_canvas.configure(yscrollcommand=pl_scroll.set)
@@ -1536,7 +1396,6 @@ def open_team(tid: int):
     pl_canvas.bind('<Configure>', lambda e: pl_canvas.itemconfig(wid_pl, width=pl_canvas.winfo_width()))
     players_frame.bind('<Configure>', lambda e: pl_canvas.configure(scrollregion=pl_canvas.bbox('all')))
 
-    # Pour chaque joueur : ligne avec portrait, nom, actions (voir/modifier/supprimer), stats synthèse
     cursor.execute('SELECT id, name, logo FROM Players WHERE team_id=?', (tid,))
     for pid, pname, plogo in cursor.fetchall():
         cursor.execute('''SELECT COALESCE(SUM(ps.kills),0), COALESCE(SUM(ps.deaths),0),
@@ -1565,7 +1424,6 @@ def open_team(tid: int):
         tk.Label(box, text=f"Win-rate : {wr:.1f} % | K/D : {kd:.2f}", fg=FG, bg=BG
                 ).pack(anchor='w', padx=6, pady=(0, 6))
 
-    # Colonne droite : maps jouées par l’équipe (avec stats de rounds)
     right_outer = tk.Frame(body, bg=ACCENT, bd=1)
     right_outer.pack(side='left', fill='both', expand=True, padx=10)
     right_inner = tk.Frame(right_outer, bg=BG); right_inner.pack(fill='both', expand=True, padx=4, pady=4)
@@ -1579,7 +1437,6 @@ def open_team(tid: int):
     map_canvas.bind('<Configure>', lambda e: map_canvas.itemconfig(wid_mp, width=map_canvas.winfo_width()))
     maps_frame.bind('<Configure>', lambda e: map_canvas.configure(scrollregion=map_canvas.bbox('all')))
 
-    # Chaque ligne = une map avec son image et stats (games, win-rate rounds)
     cursor.execute('''SELECT m.id, m.name, m.image,
                              COUNT(matches.id),
                              COALESCE(SUM(matches.rounds_won),0),
@@ -1601,7 +1458,6 @@ def open_team(tid: int):
         tk.Label(bbox, text=f"Games : {games} | Win-rate rounds : {wr_val:.1f} %",
                  fg=FG, bg=BG).pack(anchor='w', padx=6, pady=(0, 6))
 
-    # Bouton export (ouvre l’overlay d’export des rapports)
     tk.Button(root, text='Exporter', bg=ACCENT, fg='#04120d', bd=0, font=('Arial', 12, 'bold'),
               command=export_overlay).pack(pady=10)
 
@@ -1609,12 +1465,6 @@ def open_team(tid: int):
 # Leaderboard + Match overlay
 # ======================================================================
 def get_leaderboard():
-    """
-    Construit le leaderboard des équipes trié par nombre de « wins »
-    (au sens « match où rounds_won > rounds_lost »).
-    - Retourne une liste de tuples (team_id, name, logo, wins)
-    - Tri secondaire par nom d’équipe (ordre alpha, insensible à la casse)
-    """
     cursor.execute('''
         SELECT
             t.id,
@@ -1630,20 +1480,15 @@ def get_leaderboard():
 
 def add_match_dual_overlay():
     """
-    Overlay d’ajout d’un match entre deux équipes (A vs B) sur une map.
-    - On saisit le score en rounds (A — B).
-    - On coche les joueurs ayant joué et on saisit leurs kills/deaths/bombs.
-    - On enregistre automatiquement DEUX lignes dans Matches :
-      * une vue côté équipe A (rounds_won = score A)
-      * une vue côté équipe B (rounds_won = score B)
-    - Puis on insère les PlayerStats associés à chacune des deux entrées.
-    Permissions : admin ou capitaine (peu importe l’équipe sélectionnée).
+    Ajouter un match entre deux équipes (A vs B) sur une map donnée.
+    Décision de gestion : réservé à l’ADMIN.
     """
-    if current_role not in ('admin', 'captain'):
+    # Admin seulement
+    if not is_admin():
         return
+
     ov = show_overlay()
 
-    # On charge les maps et les équipes (noms pour les menus déroulants)
     cursor.execute('SELECT id,name FROM Maps ORDER BY name COLLATE NOCASE')
     maps = cursor.fetchall()
     map_names = [m[1] for m in maps] or ['Aucune map']
@@ -1655,31 +1500,21 @@ def add_match_dual_overlay():
     team1_v = tk.StringVar(value=(team_names[0] if team_names else ''))
     team2_v = tk.StringVar(value=(team_names[1] if len(team_names) > 1 else (team_names[0] if team_names else '')))
 
-    # Scores en rounds
     team1_rounds_v = tk.IntVar(value=0)
     team2_rounds_v = tk.IntVar(value=0)
 
-    # Dictionnaires : player_id -> (played_var, kills_var, deaths_var, bombs_var)
     team1_entries = {}
     team2_entries = {}
 
-    # Validation pour n’accepter que des chiffres dans les entry
     def only_digits(P): return P.isdigit() or P == ''
     vcmd = (root.register(only_digits), '%P')
 
     def find_id_by_name(seq, name):
-        """Récupère l’ID correspondant à un nom donné dans une liste (id,name)."""
         for _id, nm in seq:
             if nm == name: return _id
         return None
 
     def build_entries_for_team(parent, tid, target_dict):
-        """
-        Construit la grille des joueurs pour l’équipe `tid` :
-        - Une case à cocher « a joué »
-        - 3 champs K/D/B activés uniquement si coché
-        - On remplit `target_dict` pour lecture lors de la sauvegarde
-        """
         for w in parent.winfo_children(): w.destroy()
         target_dict.clear()
         if tid is None:
@@ -1707,16 +1542,11 @@ def add_match_dual_overlay():
             ent_b = ttk.Entry(row, textvariable=b, width=6, validate='key', validatecommand=vcmd, style='Login.TEntry', state='disabled')
             ent_k.pack(side='left', padx=2); ent_d.pack(side='left', padx=2); ent_b.pack(side='left', padx=2)
             def toggle_fields(*_args, v=played, fields=(ent_k, ent_d, ent_b)):
-                """
-                Active/désactive les champs au gré de la case « a joué ».
-                Ça garde l’UI propre : pas besoin de mettre 0 partout.
-                """
                 st = 'normal' if v.get() else 'disabled'
                 for f in fields: f.configure(state=st)
             played.trace_add('write', toggle_fields)
             target_dict[pid] = (played, k, d, b)
 
-    # UI de la grande modale (sélecteurs + deux colonnes de joueurs)
     root.update_idletasks()
     max_h = root.winfo_height() - 60
     frm = tk.Frame(ov, bg=SUB_HDR, bd=2, highlightbackground=ACCENT, highlightthickness=2)
@@ -1769,28 +1599,16 @@ def add_match_dual_overlay():
     t2_frame.bind('<Configure>', lambda e: t2_canvas.configure(scrollregion=t2_canvas.bbox('all')))
 
     def refresh_rosters(*_args):
-        """
-        Recharge les rosters (listes de joueurs) en fonction des équipes
-        choisies dans les menus déroulants.
-        """
         tid1 = find_id_by_name(teams, team1_v.get())
         tid2 = find_id_by_name(teams, team2_v.get())
         build_entries_for_team(t1_frame, tid1, team1_entries)
         build_entries_for_team(t2_frame, tid2, team2_entries)
 
-    # Quand on change l’une des équipes, on relit le roster
     team1_v.trace_add('write', refresh_rosters)
     team2_v.trace_add('write', refresh_rosters)
     refresh_rosters()
 
     def save():
-        """
-        Valide les entrées et enregistre :
-        - Deux lignes dans Matches (une par équipe)
-        - Les PlayerStats pour chaque équipe selon les cases cochées
-        - Quelques validations UX : 2 équipes différentes, map choisie,
-          scores valides, minimum de 4 rounds combinés.
-        """
         if not teams or len(teams) < 2:
             messagebox.showerror('Erreur', "Il faut au moins 2 équipes dans la ligue."); return
         tid1 = find_id_by_name(teams, team1_v.get())
@@ -1822,7 +1640,6 @@ def add_match_dual_overlay():
         messagebox.showinfo('Succès', 'Match enregistré pour les deux équipes.')
         ov.destroy(); load_home()
 
-    # Barre de boutons de l’overlay
     bar = tk.Frame(frm, bg=SUB_HDR); bar.pack(side='bottom', fill='x', pady=12)
     ttk.Button(bar, text='Annuler', command=ov.destroy).pack(side='left', padx=45)
     ttk.Button(bar, text='Enregistrer', style='Neon.TButton', command=save).pack(side='right', padx=45)
@@ -1832,13 +1649,8 @@ def add_match_dual_overlay():
 # ======================================================================
 def load_home():
     """
-    Page d’accueil dynamique selon le rôle :
-    - Admin : gros panneaux d’actions (maps, DB, équipes, matchs)
-    - Capitaine : ajouter équipe / match
-    - Visiteur : lecture seule
-    Sections :
-    - Colonne gauche : « MY TEAM » (si capitaine) + « LEAGUE TEAMS »
-    - Colonne droite : leaderboard trié par victoires
+    Page d’accueil adaptée selon le rôle.
+    Pour les capitaines : plus de création d’équipes/matchs ici; c’est l’admin qui gère ça.
     """
     global _overlay
     if _overlay:
@@ -1848,21 +1660,15 @@ def load_home():
 
     header = tk.Frame(root, bg=HEADER_BG); header.pack(fill='x')
 
-    # Logo en grand (si présent dans /images)
     logo_big = load_img(os.path.join(IMAGES_DIR, 'logoapp.png'), (150, 150))
     if logo_big:
         lbl = tk.Label(header, image=logo_big, bg=HEADER_BG); lbl.image = logo_big
         lbl.pack(side='left', padx=10, pady=10)
 
-    # Titre (taille réduite volontairement pour ne pas empiéter sur les icônes)
-    tk.Label(header, text='𝕾𝖙𝖆𝖙𝖎𝖘𝖙𝖎𝖖𝖚𝖊 𝕬𝖕𝖕𝖑𝖎𝖈𝖆𝖙𝖎𝖔𝖓',
+    tk.Label(header, text='𝕾𝖙𝖆𝖙𝖎𝖘𝖙𝖎𝖖𝖚𝖊 LEAGUE',
              font=('Consolas', 28, 'bold'), bg=HEADER_BG, fg=FG).pack(side='left', padx=10)
 
     def icon(img, cmd, fallback, img_size=(160, 160)):
-        """
-        Petit helper pour placer une icône d’action dans l’en-tête.
-        - Si l’image est absente, on met un bouton texte « fallback ».
-        """
         frame = tk.Frame(header, bg=HEADER_BG); frame.pack(side='right', padx=10, pady=10)
         ic = load_img(os.path.join(IMAGES_DIR, img), img_size)
         if ic:
@@ -1871,10 +1677,10 @@ def load_home():
         else:
             tk.Button(frame, text=fallback, bg=ACCENT, fg='#04120d', bd=0, width=18, height=3, command=cmd).pack()
 
-    # Se déconnecter (retour à l’écran de login)
+    # Se déconnecter
     icon('logout.png', show_login, 'Se déconnecter', img_size=(120,120))
 
-    # Actions de rôle (à droite, en ordre de priorité)
+    # Boutons d’action selon le rôle
     if is_admin():
         icon('deletemap.png', delete_map_overlay, 'Supprimer map')
         icon('database.png', database_overlay, 'Database')
@@ -1882,19 +1688,14 @@ def load_home():
         icon('ajouterequipe.png', add_team_overlay, 'Ajouter équipe', img_size=(120, 120))
         icon('ajoutermatch.png', add_match_dual_overlay, 'Ajouter match', img_size=(120, 120))
     elif is_captain():
-        icon('ajouterequipe.png', add_team_overlay, 'Ajouter équipe', img_size=(120, 120))
-        icon('ajoutermatch.png', add_match_dual_overlay, 'Ajouter match', img_size=(120, 120))
+        # Le capitaine attend d’être assigné par l’admin; ensuite il gère juste SA team.
+        pass
 
-    # Corps principal (2 colonnes)
     body = tk.Frame(root, bg=BG); body.pack(fill='both', expand=True, padx=20, pady=12)
 
     left_column = tk.Frame(body, bg=BG); left_column.pack(side='left', fill='both', expand=True, padx=(0, 10))
 
     def make_stack_panel(parent, title):
-        """
-        Construit un panneau empilable avec un en-tête et un contenu scrollable.
-        On l’utilise pour « MY TEAM » et « LEAGUE TEAMS ».
-        """
         outer = tk.Frame(parent, bg=ACCENT, bd=1); outer.pack(fill='both', expand=True, pady=8)
         inner = tk.Frame(outer, bg=BG); inner.pack(fill='both', expand=True, padx=4, pady=4)
         bar = tk.Frame(inner, bg=SUB_HDR); bar.pack(fill='x')
@@ -1912,19 +1713,11 @@ def load_home():
         return grid
 
     grid_my = None
-    # SHOW "MY TEAM" ONLY FOR CAPTAINS
-    # Si on est capitaine, on affiche un panneau dédié à son équipe.
     if is_captain():
-        grid_my = make_stack_panel(left_column, '𝕄𝕐 𝕋𝔼𝔸𝕄')
-    # Panneau des équipes de ligue (toujours visible)
-    grid_league = make_stack_panel(left_column, 'LEAGUE TEAMS')
+        grid_my = make_stack_panel(left_column, 'Mon équipe ')
+    grid_league = make_stack_panel(left_column, 'équipes')
 
     def add_team_thumbnail(panel, tid, name, logo):
-        """
-        Ajoute une tuile (vignette) d’équipe dans un grid 4 colonnes.
-        - Image 100x100 (ou placeholder « anonymous.png »)
-        - Bouton ouvre la fiche d’équipe
-        """
         n = len(panel.grid_slaves())
         r, c = divmod(n, 4)
         cell = tk.Frame(panel, bg=BG); cell.grid(row=r, column=c, padx=10, pady=10)
@@ -1936,37 +1729,31 @@ def load_home():
                         command=lambda i=tid: open_team(i))
         btn.image = img; btn.pack()
 
-    # On récupère toutes les équipes pour alimenter les panneaux
     cursor.execute('SELECT id, name, logo, side FROM Teams ORDER BY name COLLATE NOCASE')
     all_teams = cursor.fetchall()
 
     if is_admin():
-        # Admin voit UNIQUEMENT le panneau League, mais avec TOUTES les équipes
         for tid, name, logo, side in all_teams:
             add_team_thumbnail(grid_league, tid, name, logo)
     elif is_captain():
-        # Capitaine : panneau "My Team" = son équipe à lui seulement
         my_tid = get_captain_team_id(current_captain)
         if my_tid:
             cursor.execute('SELECT id,name,logo FROM Teams WHERE id=?', (my_tid,))
             t = cursor.fetchone()
             if t and grid_my is not None:
                 add_team_thumbnail(grid_my, t[0], t[1], t[2])
-        # Panneau League : toutes les équipes (incluant la sienne)
         for tid, name, logo, side in all_teams:
             add_team_thumbnail(grid_league, tid, name, logo)
     else:
-        # Visiteur : seulement le panneau League
         for tid, name, logo, side in all_teams:
             add_team_thumbnail(grid_league, tid, name, logo)
 
-    # Colonne droite : leaderboard (scrollable aussi)
     right_column = tk.Frame(body, bg=BG); right_column.pack(side='left', fill='both', expand=True, padx=(10, 0))
     leaderboard_outer = tk.Frame(right_column, bg=ACCENT, bd=1); leaderboard_outer.pack(fill='both', expand=True)
     leaderboard_inner = tk.Frame(leaderboard_outer, bg=BG); leaderboard_inner.pack(fill='both', expand=True, padx=4, pady=4)
 
     title_bar = tk.Frame(leaderboard_inner, bg=SUB_HDR); title_bar.pack(fill='x')
-    tk.Label(title_bar, text='LEADERBOARD (Wins)', font=('Consolas', 16, 'bold'), bg=SUB_HDR, fg=FG).pack(pady=6)
+    tk.Label(title_bar, text='LEADERBOARD ', font=('Consolas', 16, 'bold'), bg=SUB_HDR, fg=FG).pack(pady=6)
 
     lb_wrap = tk.Frame(leaderboard_inner, bg=BG); lb_wrap.pack(fill='both', expand=True, pady=(4, 2))
     lb_canvas = tk.Canvas(lb_wrap, bg=BG, highlightthickness=0); lb_canvas.pack(side='left', fill='both', expand=True)
@@ -1976,7 +1763,6 @@ def load_home():
     lb_canvas.bind('<Configure>', lambda e: lb_canvas.itemconfig(wid_lb, width=lb_canvas.winfo_width()))
     lb_frame.bind('<Configure>', lambda e: lb_canvas.configure(scrollregion=lb_canvas.bbox('all')))
 
-    # Remplir le tableau du leaderboard
     leaderboard = get_leaderboard()
     rank = 1
     for tid, name, logo, wins in leaderboard:
@@ -1990,21 +1776,16 @@ def load_home():
         tk.Label(row, image=img_small, bg=BG).pack(side='left', padx=4)
         tk.Label(row, text=name, fg=FG, bg=BG, font=('Arial', 12, 'bold')).pack(side='left', padx=8)
         tk.Label(row, text=f"Wins: {wins}", fg=FG, bg=BG, font=('Consolas', 12)).pack(side='right', padx=8)
-        # Clique sur la ligne = ouvre la fiche d’équipe
         row.bind('<Button-1>', lambda _e, i=tid: open_team(i))
         for child in row.winfo_children():
             child.bind('<Button-1>', lambda _e, i=tid: open_team(i))
         rank += 1
 
-    # Bouton export global (réutilise export_overlay)
     tk.Button(root, text='Exporter', bg=ACCENT, fg='#04120d', bd=0, font=('Arial', 12, 'bold'),
               command=export_overlay).pack(pady=10)
 
 # ======================================================================
 # Boucle principale
 # ======================================================================
-# Au démarrage : écran de login d’abord (choix du rôle), ensuite mainloop.
 show_login()
 root.mainloop()
-
-
