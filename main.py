@@ -276,6 +276,54 @@ def show_overlay():
     _overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
     return _overlay
 
+def open_child(win, parent=root, width=520, height=320, anchor_widget=None):
+    """
+    Ouvre une Toplevel centrée sur root OU à côté d’un widget déclencheur.
+    """
+    win.transient(parent)
+    win.grab_set()
+    parent.update_idletasks()
+
+    if anchor_widget:
+        x = anchor_widget.winfo_rootx() + 30
+        y = anchor_widget.winfo_rooty() + 30
+    else:
+        px = parent.winfo_rootx()
+        py = parent.winfo_rooty()
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        x = px + (pw - width) // 2
+        y = py + (ph - height) // 2
+
+    win.geometry(f"{width}x{height}+{x}+{y}")
+    win.resizable(False, False)
+    return win
+
+def bind_mousewheel(canvas):
+    """
+    Rend la molette de souris fonctionnelle sur un Canvas scrollable (Windows/Mac/Linux).
+    """
+    def _on_mousewheel(event):
+        if event.delta:
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        elif event.num == 4:
+            canvas.yview_scroll(-3, "units")
+        elif event.num == 5:
+            canvas.yview_scroll(3, "units")
+
+    def _bind(_):
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind_all("<Button-4>", _on_mousewheel)
+        canvas.bind_all("<Button-5>", _on_mousewheel)
+
+    def _unbind(_):
+        canvas.unbind_all("<MouseWheel>")
+        canvas.unbind_all("<Button-4>")
+        canvas.unbind_all("<Button-5>")
+
+    canvas.bind("<Enter>", _bind)
+    canvas.bind("<Leave>", _unbind)
+
 def is_admin(): return current_role == 'admin'
 
 def is_captain():
@@ -407,8 +455,7 @@ def show_login():
         win = tk.Toplevel(root)
         win.title('Connexion administrateur')
         win.configure(bg=BG)
-        win.resizable(False, False)
-        win.grab_set()
+        open_child(win, width=520, height=260)  # 👈 centré
 
         box = ttk.Frame(win, style='Card.TFrame')
         box.pack(padx=18, pady=18, fill='both', expand=True)
@@ -449,8 +496,7 @@ def show_login():
         win = tk.Toplevel(root)
         win.title('Capitaine — Connexion / Création')
         win.configure(bg=BG)
-        win.resizable(False, False)
-        win.grab_set()
+        open_child(win, width=560, height=420)  # 👈 centré
 
         box = ttk.Frame(win, style='Card.TFrame')
         box.pack(padx=18, pady=18, fill='both', expand=True)
@@ -958,7 +1004,8 @@ def export_best_players():
     data = cursor.fetchall()
     players = [(name, k, d, (k/d if d else k)) for name, k, d in data]
     players.sort(key=lambda x: x[3], reverse=True)
-    with open(path, 'w', newline='', encoding='utf-8') as f:
+    # 👉 Excel-proof : utf-8-sig
+    with open(path, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.writer(f)
         writer.writerow(['Joueur','Total_Kills','Total_Deaths','KD'])
         for name, k, d, kd in players:
@@ -981,7 +1028,8 @@ def export_best_teams():
     data = cursor.fetchall()
     teams = [(name, w, l, (w/(w+l)*100 if (w+l) else 0)) for name, w, l in data]
     teams.sort(key=lambda x: x[3], reverse=True)
-    with open(path, 'w', newline='', encoding='utf-8') as f:
+    # 👉 Excel-proof : utf-8-sig
+    with open(path, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.writer(f)
         writer.writerow(['Équipe','Victoires','Défaites','WinRate_%'])
         for name, w, l, wr in teams:
@@ -1004,7 +1052,8 @@ def export_most_played_maps():
     ''')
     data = cursor.fetchall()
     maps = sorted(data, key=lambda x: x[1], reverse=True)
-    with open(path, 'w', newline='', encoding='utf-8') as f:
+    # 👉 Excel-proof : utf-8-sig
+    with open(path, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.writer(f)
         writer.writerow(['Map','Total_Rounds'])
         for name, total in maps:
@@ -1012,19 +1061,31 @@ def export_most_played_maps():
     messagebox.showinfo('Succès', 'Rapport Maps les plus jouées enregistré.')
 
 def export_overlay():
-    ov = show_overlay()
-    frm = tk.Frame(ov, bg=SUB_HDR, bd=2, highlightbackground=ACCENT, highlightthickness=2)
-    frm.place(relx=0.5, rely=0.5, anchor='center', width=400, height=280)
+    """
+    Version fenêtre (Toplevel) — ne bloque plus toute l’UI.
+    """
+    win = tk.Toplevel(root)
+    win.title("Exporter rapports")
+    win.configure(bg=BG)
+    open_child(win, width=420, height=300)
+
+    frm = tk.Frame(win, bg=SUB_HDR, bd=2, highlightbackground=ACCENT, highlightthickness=2)
+    frm.pack(fill='both', expand=True, padx=12, pady=12)
+
     tk.Label(frm, text='EXPORTER RAPPORTS', fg=FG, bg=SUB_HDR,
              font=('Arial', 18, 'bold')).pack(pady=(14,10))
-    btn_frame = tk.Frame(frm, bg=BG); btn_frame.pack(fill='both', expand=True, pady=10)
+
+    btn_frame = tk.Frame(frm, bg=BG)
+    btn_frame.pack(fill='both', expand=True, pady=10)
+
     opt_btn = dict(bg=ACCENT, fg='#04120d', font=('Arial', 12, 'bold'), bd=0, width=25, pady=8)
+
     tk.Button(btn_frame, text='1 - Meilleurs joueurs', command=export_best_players, **opt_btn).pack(pady=4)
     tk.Button(btn_frame, text='2 - Meilleures équipes', command=export_best_teams, **opt_btn).pack(pady=4)
     tk.Button(btn_frame, text='3 - Maps les plus jouées', command=export_most_played_maps, **opt_btn).pack(pady=4)
-    bar = tk.Frame(frm, bg=SUB_HDR); bar.pack(side='bottom', fill='x', pady=8)
-    tk.Button(bar, text='Annuler', command=ov.destroy, bg=ACCENT, fg='#04120d', font=('Arial', 12, 'bold'),
-              bd=0, padx=20, pady=8).pack()
+
+    tk.Button(frm, text='Fermer', command=win.destroy, bg=ACCENT, fg='#04120d',
+              font=('Arial', 12, 'bold'), bd=0, padx=20, pady=8).pack(pady=(0,8))
 
 # ======================================================================
 # Analyses / Vues
@@ -1200,6 +1261,7 @@ def open_player(pid: int):
     yscr = tk.Scrollbar(body, orient='vertical', command=canvas.yview)
     canvas.configure(yscrollcommand=yscr.set)
     yscr.pack(side='right', fill='y'); canvas.pack(side='left', fill='both', expand=True)
+    bind_mousewheel(canvas)  # 👈 molette
     inner = tk.Frame(canvas, bg=BG); wid = canvas.create_window((0, 0), window=inner, anchor='nw')
     canvas.bind('<Configure>', lambda e: canvas.itemconfig(wid, width=canvas.winfo_width()))
     inner.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
@@ -1388,6 +1450,7 @@ def open_team(tid: int):
                   command=lambda: add_player_overlay(tid)).pack(pady=6)
 
     pl_canvas = tk.Canvas(left_inner, bg=BG, highlightthickness=0)
+    bind_mousewheel(pl_canvas)  # 👈 molette
     pl_scroll = tk.Scrollbar(left_inner, orient='vertical', command=pl_canvas.yview)
     pl_canvas.configure(yscrollcommand=pl_scroll.set)
     pl_scroll.pack(side='right', fill='y'); pl_canvas.pack(side='left', fill='both', expand=True)
@@ -1428,6 +1491,7 @@ def open_team(tid: int):
     right_outer.pack(side='left', fill='both', expand=True, padx=10)
     right_inner = tk.Frame(right_outer, bg=BG); right_inner.pack(fill='both', expand=True, padx=4, pady=4)
     map_canvas = tk.Canvas(right_inner, bg=BG, highlightthickness=0)
+    bind_mousewheel(map_canvas)  # 👈 molette
     ms = tk.Scrollbar(right_inner, orient='vertical', command=map_canvas.yview)
     map_canvas.configure(yscrollcommand=ms.set)
     ms.pack(side='right', fill='y'); map_canvas.pack(side='left', fill='both', expand=True)
@@ -1580,6 +1644,7 @@ def add_match_dual_overlay():
     tk.Label(left_inner, text='Joueurs Équipe A', fg=FG, bg=SUB_HDR, font=('Consolas', 14, 'bold')).pack(fill='x', pady=(0, 6))
     t1_wrap = tk.Frame(left_inner, bg=BG); t1_wrap.pack(fill='both', expand=True)
     t1_canvas = tk.Canvas(t1_wrap, bg=BG, highlightthickness=0); t1_canvas.pack(side='left', fill='both', expand=True)
+    bind_mousewheel(t1_canvas)  # 👈 molette
     t1_scroll = tk.Scrollbar(t1_wrap, orient='vertical', command=t1_canvas.yview); t1_scroll.pack(side='right', fill='y')
     t1_canvas.configure(yscrollcommand=t1_scroll.set)
     t1_frame = tk.Frame(t1_canvas, bg=BG); t1_id = t1_canvas.create_window((0,0), window=t1_frame, anchor='nw')
@@ -1592,6 +1657,7 @@ def add_match_dual_overlay():
     tk.Label(right_inner, text='Joueurs Équipe B', fg=FG, bg=SUB_HDR, font=('Consolas', 14, 'bold')).pack(fill='x', pady=(0, 6))
     t2_wrap = tk.Frame(right_inner, bg=BG); t2_wrap.pack(fill='both', expand=True)
     t2_canvas = tk.Canvas(t2_wrap, bg=BG, highlightthickness=0); t2_canvas.pack(side='left', fill='both', expand=True)
+    bind_mousewheel(t2_canvas)  # 👈 molette
     t2_scroll = tk.Scrollbar(t2_wrap, orient='vertical', command=t2_canvas.yview); t2_scroll.pack(side='right', fill='y')
     t2_canvas.configure(yscrollcommand=t2_scroll.set)
     t2_frame = tk.Frame(t2_canvas, bg=BG); t2_id = t2_canvas.create_window((0,0), window=t2_frame, anchor='nw')
@@ -1706,6 +1772,7 @@ def load_home():
         canvas.configure(yscrollcommand=ybar.set)
         ybar.pack(side='right', fill='y')
         canvas.pack(side='left', fill='both', expand=True)
+        bind_mousewheel(canvas)  # 👈 molette
         grid = tk.Frame(canvas, bg=BG)
         wid = canvas.create_window((0, 0), window=grid, anchor='nw')
         canvas.bind('<Configure>', lambda e: canvas.itemconfig(wid, width=canvas.winfo_width()))
@@ -1757,6 +1824,7 @@ def load_home():
 
     lb_wrap = tk.Frame(leaderboard_inner, bg=BG); lb_wrap.pack(fill='both', expand=True, pady=(4, 2))
     lb_canvas = tk.Canvas(lb_wrap, bg=BG, highlightthickness=0); lb_canvas.pack(side='left', fill='both', expand=True)
+    bind_mousewheel(lb_canvas)  # 👈 molette
     lb_scroll = tk.Scrollbar(lb_wrap, orient='vertical', command=lb_canvas.yview); lb_scroll.pack(side='right', fill='y')
     lb_canvas.configure(yscrollcommand=lb_scroll.set)
     lb_frame = tk.Frame(lb_canvas, bg=BG); wid_lb = lb_canvas.create_window((0, 0), window=lb_frame, anchor='nw')
@@ -1789,3 +1857,5 @@ def load_home():
 # ======================================================================
 show_login()
 root.mainloop()
+
+
