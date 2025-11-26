@@ -1,3 +1,6 @@
+pip install pyperclip pillow matplotlib
+
+
 Résumé simple et professionnel de ton application
 1. Les rôles dans l’application
  Visiteurs

@@ -1,3 +1,9 @@
+
+Simplement faire :
+pip install pyperclip pillow matplotlib
+
+
+
 # StatTeam — Application de Suivi de Performance pour Équipes FPS Compétitives
 Conçue pour les joueurs d’eSport et les entraîneurs qui veulent une vision claire et locale des performances d’équipe et adverses.
 
